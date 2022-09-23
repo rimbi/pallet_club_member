@@ -18,8 +18,10 @@ mod benchmarking;
 pub mod pallet {
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
+	use sp_std::{collections::btree_set::BTreeSet, vec::Vec};
 
 	#[pallet::pallet]
+	#[pallet::without_storage_info]
 	#[pallet::generate_store(pub(super) trait Store)]
 	pub struct Pallet<T>(_);
 
@@ -33,28 +35,59 @@ pub mod pallet {
 	// The pallet's runtime storage items.
 	// https://docs.substrate.io/main-docs/build/runtime-storage/
 	#[pallet::storage]
-	#[pallet::getter(fn something)]
+	#[pallet::getter(fn clubstore)]
 	// Learn more about declaring storage items:
 	// https://docs.substrate.io/main-docs/build/runtime-storage/#declaring-storage-items
-	pub type Something<T> = StorageValue<_, u32>;
+	pub type ClubStore<T: Config> =
+		StorageMap<_, Blake2_128Concat, Vec<u8>, BTreeSet<T::AccountId>, ValueQuery>;
 
 	// Pallets use events to inform users when important changes are made.
 	// https://docs.substrate.io/main-docs/build/events-errors/
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
-		/// Event documentation should end with an array that provides descriptive names for event
-		/// parameters. [something, who]
-		SomethingStored(u32, T::AccountId),
+		/// Member added to the club successfully
+		MemberAdded(Vec<u8>, T::AccountId),
+		/// Member removed from the club successfully
+		MemberRemoved(Vec<u8>, T::AccountId),
+		/// Member added to the club successfully
+		ClubAdded(Vec<u8>),
+		/// Member removed from the club successfully
+		ClubRemoved(Vec<u8>),
 	}
 
 	// Errors inform users that something went wrong.
 	#[pallet::error]
 	pub enum Error<T> {
-		/// Error names should be descriptive.
-		NoneValue,
-		/// Errors should have helpful documentation associated with them.
-		StorageOverflow,
+		/// There is no such club
+		InvalidClub,
+		ClubAlreadyExists,
+	}
+
+	// Our pallet's genesis configuration.
+	#[pallet::genesis_config]
+	pub struct GenesisConfig<T: Config> {
+		pub clubs: Vec<Vec<u8>>,
+		pub other: PhantomData<T>,
+	}
+
+	// Required to implement default for GenesisConfig.
+	#[cfg(feature = "std")]
+	impl<T: Config> Default for GenesisConfig<T> {
+		fn default() -> GenesisConfig<T> {
+			GenesisConfig { clubs: vec![], other: PhantomData }
+		}
+	}
+
+	#[pallet::genesis_build]
+	impl<T: Config> GenesisBuild<T> for GenesisConfig<T> {
+		fn build(&self) {
+			// When building a kitty from genesis config, we require the dna and gender to be
+			// supplied.
+			for club in &self.clubs {
+				<ClubStore<T>>::insert(club, BTreeSet::<T::AccountId>::new());
+			}
+		}
 	}
 
 	// Dispatchable functions allows users to interact with the pallet and invoke state changes.
@@ -62,41 +95,83 @@ pub mod pallet {
 	// Dispatchable functions must be annotated with a weight and must return a DispatchResult.
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
-		/// An example dispatchable that takes a singles value as a parameter, writes the value to
-		/// storage and emits an event. This function must be dispatched by a signed extrinsic.
+		/// Adds a new club.
+		///
+		/// If the club already exists returns Error
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
-		pub fn do_something(origin: OriginFor<T>, something: u32) -> DispatchResult {
-			// Check that the extrinsic was signed and get the signer.
-			// This function will return an error if the extrinsic is not signed.
-			// https://docs.substrate.io/main-docs/build/origins/
-			let who = ensure_signed(origin)?;
+		pub fn add_club(origin: OriginFor<T>, club: Vec<u8>) -> DispatchResult {
+			ensure_root(origin)?;
+
+			ensure!(!<ClubStore<T>>::contains_key(club.clone()), Error::<T>::ClubAlreadyExists);
 
 			// Update storage.
-			<Something<T>>::put(something);
+			<ClubStore<T>>::insert(club.clone(), BTreeSet::<T::AccountId>::new());
+			Self::deposit_event(Event::ClubAdded(club));
 
-			// Emit an event.
-			Self::deposit_event(Event::SomethingStored(something, who));
-			// Return a successful DispatchResultWithPostInfo
 			Ok(())
 		}
 
-		/// An example dispatchable that may throw a custom error.
-		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1))]
-		pub fn cause_error(origin: OriginFor<T>) -> DispatchResult {
-			let _who = ensure_signed(origin)?;
+		/// Removes a club.
+		///
+		/// If the club does not exist returns Error
+		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
+		pub fn remove_club(origin: OriginFor<T>, club: Vec<u8>) -> DispatchResult {
+			ensure_root(origin)?;
 
-			// Read a value from storage.
-			match <Something<T>>::get() {
-				// Return an error if the value has not been set.
-				None => return Err(Error::<T>::NoneValue.into()),
-				Some(old) => {
-					// Increment the value read from storage; will error in the event of overflow.
-					let new = old.checked_add(1).ok_or(Error::<T>::StorageOverflow)?;
-					// Update the value in storage with the incremented result.
-					<Something<T>>::put(new);
-					Ok(())
-				},
-			}
+			ensure!(<ClubStore<T>>::contains_key(club.clone()), Error::<T>::InvalidClub);
+
+			// Update storage.
+			<ClubStore<T>>::remove(club.clone());
+			Self::deposit_event(Event::ClubRemoved(club));
+
+			Ok(())
+		}
+
+		/// Adds a member to the club.
+		///
+		/// If the club does not exist returns Error
+		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
+		pub fn add_member(
+			origin: OriginFor<T>,
+			club: Vec<u8>,
+			member: T::AccountId,
+		) -> DispatchResult {
+			ensure_root(origin)?;
+
+			// Update storage.
+			ensure!(<ClubStore<T>>::contains_key(club.clone()), Error::<T>::InvalidClub);
+
+			<ClubStore<T>>::mutate(club.clone(), |members| members.insert(member.clone()));
+			Self::deposit_event(Event::MemberAdded(club, member));
+
+			Ok(())
+		}
+
+		/// Removes a member from the club.
+		///
+		/// If the club does not exist returns Error
+		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
+		pub fn remove_member(
+			origin: OriginFor<T>,
+			club: Vec<u8>,
+			member: T::AccountId,
+		) -> DispatchResult {
+			ensure_root(origin)?;
+
+			// Update storage.
+			ensure!(<ClubStore<T>>::contains_key(club.clone()), Error::<T>::InvalidClub);
+
+			<ClubStore<T>>::mutate(club.clone(), |members| {
+				members.retain(|m| {
+					let diff = *m != member;
+					if !diff {
+						Self::deposit_event(Event::MemberRemoved(club.clone(), member.clone()));
+					}
+					diff
+				})
+			});
+
+			Ok(())
 		}
 	}
 }
