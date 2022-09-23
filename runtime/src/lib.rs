@@ -265,7 +265,7 @@ impl pallet_sudo::Config for Runtime {
 	type Call = Call;
 }
 
-/// Configure the pallet-club-member in pallets/template.
+/// Configure the pallet-club-member in pallets/club_member.
 impl pallet_club_member::Config for Runtime {
 	type Event = Event;
 }
